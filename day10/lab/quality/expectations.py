@@ -112,5 +112,35 @@ def run_expectations(cleaned_rows: List[Dict[str, Any]]) -> Tuple[List[Expectati
         )
     )
 
+    # E7: không ingest chunk noisy / corrupted
+    noisy = [
+        r
+        for r in cleaned_rows
+        if re.search(r"!!!|nội dung không rõ ràng|ghi chú", (r.get("chunk_text") or "").lower())
+    ]
+    ok7 = len(noisy) == 0
+    results.append(
+        ExpectationResult(
+            "no_noisy_chunk_text",
+            ok7,
+            "halt",
+            f"noisy_chunks={len(noisy)}",
+        )
+    )
+
+    # E8: source access_control_sop phải có tối thiểu 1 chunk sau clean
+    access_control_chunks = [
+        r for r in cleaned_rows if r.get("doc_id") == "access_control_sop"
+    ]
+    ok8 = len(access_control_chunks) > 0
+    results.append(
+        ExpectationResult(
+            "access_control_sop_ingested",
+            ok8,
+            "halt",
+            f"access_control_chunks={len(access_control_chunks)}",
+        )
+    )
+
     halt = any(not r.passed and r.severity == "halt" for r in results)
     return results, halt

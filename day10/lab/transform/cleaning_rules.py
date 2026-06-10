@@ -20,15 +20,28 @@ ALLOWED_DOC_IDS = frozenset(
         "sla_p1_2026",
         "it_helpdesk_faq",
         "hr_leave_policy",
+        "access_control_sop",
     }
 )
 
 _ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _DMY_SLASH = re.compile(r"^(\d{2})/(\d{2})/(\d{4})$")
+_NOISE_MARKER = re.compile(r"!!!|nội dung không rõ ràng|ghi chú", re.IGNORECASE)
+_REPEAT_WORK_WINDOW = re.compile(r"(làm việc)(?:\s+\1)+", re.IGNORECASE)
 
 
 def _norm_text(s: str) -> str:
     return " ".join((s or "").strip().split()).lower()
+
+
+def _is_noise_text(text: str) -> bool:
+    normalized = _norm_text(text)
+    return bool(_NOISE_MARKER.search(normalized))
+
+
+def _is_stale_hr_text(text: str) -> bool:
+    normalized = _norm_text(text)
+    return "10 ngày phép năm" in normalized or "bản hr 2025" in normalized
 
 
 def _stable_chunk_id(doc_id: str, chunk_text: str, seq: int) -> str:
@@ -111,6 +124,14 @@ def clean_rows(
             )
             continue
 
+        if _is_noise_text(text):
+            quarantine.append({**raw, "reason": "noise_or_corrupt_chunk_text"})
+            continue
+
+        if doc_id == "hr_leave_policy" and _is_stale_hr_text(text):
+            quarantine.append({**raw, "reason": "stale_hr_policy_content"})
+            continue
+
         if not text:
             quarantine.append({**raw, "reason": "missing_chunk_text"})
             continue
@@ -121,13 +142,26 @@ def clean_rows(
             continue
         seen_text.add(key)
 
-        fixed_text = text
+        fixed_text = " ".join(text.split())
+        if doc_id == "sla_p1_2026":
+            fixed_text = re.sub(
+                r"Escalation P1:",
+                "Ticket P1 escalation:",
+                fixed_text,
+                flags=re.IGNORECASE,
+            )
+            if "tự động escalate" in fixed_text.lower() and "auto escalate" not in fixed_text.lower():
+                fixed_text += " (auto escalate)"
+
         if apply_refund_window_fix and doc_id == "policy_refund_v4":
-            if "14 ngày làm việc" in fixed_text:
-                fixed_text = fixed_text.replace(
-                    "14 ngày làm việc",
+            if "14 ngày" in fixed_text:
+                fixed_text = re.sub(
+                    r"14\s+ngày(?:\s+làm việc)?",
                     "7 ngày làm việc",
+                    fixed_text,
+                    flags=re.IGNORECASE,
                 )
+                fixed_text = _REPEAT_WORK_WINDOW.sub(r"\1", fixed_text)
                 fixed_text += " [cleaned: stale_refund_window]"
 
         seq += 1
